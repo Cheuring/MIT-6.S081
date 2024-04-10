@@ -133,8 +133,9 @@ found:
     release(&p->lock);
     return 0;
   }
+#ifdef LAB_PGTBL
   p->usyscall->pid = p->pid;
-  
+#endif
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -203,7 +204,7 @@ proc_pagetable(struct proc *p)
     uvmfree(pagetable, 0);
     return 0;
   }
-
+#ifdef LAB_PGTBL
   // map the usyscall just below TRAPFRAME
   if(mappages(pagetable, USYSCALL, PGSIZE,
               (uint64)(p->usyscall), PTE_U | PTE_R) < 0){
@@ -212,7 +213,7 @@ proc_pagetable(struct proc *p)
     uvmfree(pagetable, 0);
     return 0;
   }
-
+#endif
   return pagetable;
 }
 
@@ -221,7 +222,9 @@ proc_pagetable(struct proc *p)
 void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
+#ifdef LAB_PGTBL
   uvmunmap(pagetable, USYSCALL, 1, 0);
+#endif
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
