@@ -5,7 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-
+#include "spinlock.h"
+#include "proc.h"
 /*
  * the kernel's page table.
  */
@@ -108,7 +109,8 @@ walkaddr(pagetable_t pagetable, uint64 va)
 
   if(va >= MAXVA)
     return 0;
-
+  if(is_lazy_addr(va))
+    lazy_alloc(va);
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
@@ -173,9 +175,9 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      continue;
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      continue;
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -307,9 +309,9 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      continue;
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -431,4 +433,37 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int
+is_lazy_addr(uint64 va){
+  struct proc* p = myproc();
+  if(va < PGROUNDDOWN(p->trapframe->sp)
+  && va >= PGROUNDDOWN(p->trapframe->sp) - PGSIZE)
+    return 0;
+  
+  if(va >= MAXVA)
+    return 0;
+
+  pte_t *pte = walk(p->pagetable, va, 0);
+  if(pte && (*pte && PTE_V))
+    return 0;
+  if(va >= p->sz)
+    return 0;
+
+  return 1;
+}
+
+int
+lazy_alloc(uint64 va){
+  struct proc* p = myproc();
+  va = PGROUNDDOWN(va);
+  uint64 ka = (uint64)kalloc();
+  if(ka == 0)
+    return -1;
+  memset((void*)ka, 0, PGSIZE);
+  if(mappages(p->pagetable, va, PGSIZE, ka, PTE_U | PTE_R | PTE_W) != 0)
+    return -1;
+  
+  return 0;
 }
