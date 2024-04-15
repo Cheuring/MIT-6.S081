@@ -9,6 +9,13 @@
 #include "riscv.h"
 #include "defs.h"
 
+// #define PG2RFIDX(pa) PGROUNDDOWN(((uint64)pa) - KERNBASE)
+#define PG2RFIDX(pa) ((((uint64)pa) - KERNBASE) >> 12)
+#define MX_PGIDX PG2RFIDX(PHYSTOP)
+#define PG_REFCNT(pa) pg_refcnt[PG2RFIDX((pa))]
+int pg_refcnt[MX_PGIDX];
+struct spinlock ref_lock;
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -24,9 +31,17 @@ struct {
 } kmem;
 
 void
+incre_refcnt(uint64 pa)
+{
+  acquire(&ref_lock);
+  ++PG_REFCNT(pa);
+  release(&ref_lock);
+}
+void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&ref_lock, "ref cnt");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -51,15 +66,19 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
+  acquire(&ref_lock);
+  if(--PG_REFCNT(pa) <= 0){
+    // Fill with junk to catch dangling refs.
+    memset(pa, 1, PGSIZE);
 
-  r = (struct run*)pa;
+    r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+    acquire(&kmem.lock);
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+    release(&kmem.lock);
+  }
+  release(&ref_lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -76,7 +95,9 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    PG_REFCNT(r) = 1;
+  }
   return (void*)r;
 }
