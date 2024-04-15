@@ -12,9 +12,26 @@
 // #define PG2RFIDX(pa) PGROUNDDOWN(((uint64)pa) - KERNBASE)
 #define PG2RFIDX(pa) ((((uint64)pa) - KERNBASE) >> 12)
 #define MX_PGIDX PG2RFIDX(PHYSTOP)
-#define PG_REFCNT(pa) pg_refcnt[PG2RFIDX((pa))]
-int pg_refcnt[MX_PGIDX];
+
+int ref_count[MX_PGIDX];
 struct spinlock ref_lock;
+
+void ref_inc(uint64 pa)
+{
+  acquire(&ref_lock);
+  ++ref_count[PG2RFIDX(pa)];
+  release(&ref_lock);
+}
+void ref_dec(uint64 pa)
+{
+  acquire(&ref_lock);
+  --ref_count[PG2RFIDX(pa)];
+  release(&ref_lock);
+}
+int get_ref(uint64 pa)
+{
+  return ref_count[PG2RFIDX(pa)];
+}
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -30,13 +47,7 @@ struct {
   struct run *freelist;
 } kmem;
 
-void
-incre_refcnt(uint64 pa)
-{
-  acquire(&ref_lock);
-  ++PG_REFCNT(pa);
-  release(&ref_lock);
-}
+
 void
 kinit()
 {
@@ -67,7 +78,7 @@ kfree(void *pa)
     panic("kfree");
 
   acquire(&ref_lock);
-  if(--PG_REFCNT(pa) <= 0){
+  if(--ref_count[PG2RFIDX(pa)] <= 0){
     // Fill with junk to catch dangling refs.
     memset(pa, 1, PGSIZE);
 
@@ -97,7 +108,7 @@ kalloc(void)
 
   if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
-    PG_REFCNT(r) = 1;
+    ref_count[PG2RFIDX(r)] = 1;
   }
   return (void*)r;
 }

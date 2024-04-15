@@ -322,7 +322,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       printf("uvmcopy faile\n");
       goto err;
     }
-    incre_refcnt(pa);
+    ref_inc(pa);
   }
   return 0;
 
@@ -454,7 +454,7 @@ is_COW(pagetable_t pagetable, uint64 va)
 
   return (*pte & PTE_COW);
 }
-
+extern struct spinlock ref_lock;
 int
 COW_alloc(pagetable_t pagetable, uint64 va)
 {
@@ -462,17 +462,26 @@ COW_alloc(pagetable_t pagetable, uint64 va)
   if((pte = walk(pagetable, va, 0)) == 0)
     return -1;
   uint64 pa = PTE2PA(*pte);
-  char* mem;
-  if((mem = kalloc()) == 0)
-    return -1;
-  va = PGROUNDDOWN(va);
+  acquire(&ref_lock);
+  if(get_ref(pa) == 1){
+    *pte |= PTE_W;
+    *pte &= ~PTE_COW;
+    release(&ref_lock);
+    return 0;
+  }else{
+    release(&ref_lock);
+    char* mem;
+    if((mem = kalloc()) == 0)
+        return -1;
+    va = PGROUNDDOWN(va);
 
-  uint perm = PTE_FLAGS(*pte);
-  perm &= ~PTE_COW;
-  perm |= PTE_W;
+    uint perm = PTE_FLAGS(*pte);
+    perm &= ~PTE_COW;
+    perm |= PTE_W;
 
-  memmove(mem, (void*)pa, PGSIZE);
-  *pte = PA2PTE(mem) | perm;
-  kfree((void*)pa);
-  return 0;
+    memmove(mem, (void*)pa, PGSIZE);
+    *pte = PA2PTE(mem) | perm;
+    kfree((void*)pa);
+    return 0;
+  }
 }
