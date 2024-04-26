@@ -1,0 +1,9 @@
+{
+    "files.associations": {
+        "buf.h": "c",
+        "fs.h": "c",
+        "file.h": "c",
+        "e1000_dev.h": "c",
+        "net.h": "c"
+    }
+}
