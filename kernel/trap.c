@@ -5,6 +5,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+
+#include "sleeplock.h"
+#include "fs.h"
 #include "file.h"
 
 struct spinlock tickslock;

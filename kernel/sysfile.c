@@ -15,7 +15,9 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "buf.h"
 
+#define min(a, b) ((a) < (b) ? (a) : (b))
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -489,7 +491,7 @@ uint64
 sys_mmap(void)
 {
   uint64 addr;
-  uint length, offset;
+  int length, offset;
   int port, flags, fd;
   struct file* file;
   struct proc *p = myproc();
@@ -500,12 +502,12 @@ sys_mmap(void)
     return -1;
   if(argfd(4, &fd, &file) < 0 || argint(5, &offset) < 0)
     return -1;
-  if(!addr || !offset)
+  if(addr || offset)
     return -1;
   if(!file->writable && (port & PROT_WRITE) && (flags & MAP_SHARED))
     return -1;
 
-  struct VMA* vma;
+  struct VMA* vma = p->VMA;
   for(int i = 0; i<VMA_SZ; ++i){
     if(!vma[i].in_use){
       vma[i].addr = p->sz;
@@ -524,12 +526,43 @@ sys_mmap(void)
   return -1;
 }
 
+int _writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
+{
+  uint tot, m;
+  struct buf *bp;
+
+  if(off > ip->size || off + n < off)
+    return -1;
+  if(off + n > MAXFILE*BSIZE)
+    return -1;
+
+  for(tot=0; tot<n; tot+=m, off+=m, src+=m){
+    bp = bread(ip->dev, bmap(ip, off/BSIZE));
+    m = min(n - tot, BSIZE - off%BSIZE);
+    if(either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {
+      brelse(bp);
+      continue;
+    }
+    log_write(bp);
+    brelse(bp);
+  }
+
+  if(off > ip->size)
+    ip->size = off;
+
+  // write the i-node back to disk even if the size didn't change
+  // because the loop above might have called bmap() and added a new
+  // block to ip->addrs[].
+  iupdate(ip);
+
+  return tot;
+}
 int _fileWrite(struct file* f, uint64 addr, int n, uint off)
 {
   int r, ret = 0;
 
   if(f->writable == 0)
-    return -1;
+    return 0;
 
   if(f->type == FD_PIPE){
     ret = pipewrite(f->pipe, addr, n);
@@ -553,7 +586,7 @@ int _fileWrite(struct file* f, uint64 addr, int n, uint off)
 
       begin_op();
       ilock(f->ip);
-      if ((r = writei(f->ip, 1, addr + i, off, n1)) > 0)
+      if ((r = _writei(f->ip, 1, addr + i, off, n1)) > 0)
         off += r;
       iunlock(f->ip);
       end_op();
@@ -572,16 +605,11 @@ int _fileWrite(struct file* f, uint64 addr, int n, uint off)
   return ret;
 }
 
-uint64
-sys_munmap(void)
+uint64 munmap(uint64 addr, int length)
 {
-  uint64 addr;
-  uint length;
   struct proc* p = myproc();
   struct VMA* vma = p->VMA;
   int close = 0;
-  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
-    return -1;
   for(int i = 0; i<VMA_SZ; ++i){
     if(vma[i].in_use && addr >= vma[i].addr && addr < vma[i].addr + vma[i].length){
       addr = PGROUNDDOWN(addr);
@@ -603,11 +631,21 @@ sys_munmap(void)
         if(_fileWrite(vma[i].file, addr, length, addr - vma[i].addr) == -1)
           return -1;
       }
-      uvmunmap(p->pagetable, addr, PGROUNDDOWN(length)/PGSIZE, 1);
+      uvmunmap(p->pagetable, addr, PGROUNDUP(length)/PGSIZE, 1);
       if(close)
         fileclose(vma[i].file);
       return 0;
     }
   }
   return -1;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int length;
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+  return munmap(addr, length);
 }

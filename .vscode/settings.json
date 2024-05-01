@@ -11,6 +11,7 @@
         "utility": "c",
         "defs.h": "c",
         "fs.h": "c",
-        "spinlock.h": "c"
+        "spinlock.h": "c",
+        "sleeplock.h": "c"
     }
 }

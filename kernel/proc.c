@@ -301,6 +301,13 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  for(i = 0; i < VMA_SZ; i++){
+    if(p->VMA[i].in_use){
+      np->VMA[i] = p->VMA[i];
+      filedup(np->VMA[i].file);
+    }
+  }
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -343,6 +350,13 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  for(int i=0; i<VMA_SZ; i++){
+    if(p->VMA[i].in_use){
+      if(munmap(p->VMA[i].addr + p->VMA[i].off, p->VMA[i].length) == -1)
+        panic("exit: munmap");
+    }
+  }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
