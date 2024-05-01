@@ -1,0 +1,16 @@
+{
+    "files.associations": {
+        "user.h": "c",
+        "fcntl.h": "c",
+        "riscv.h": "c",
+        "types.h": "c",
+        "stat.h": "c",
+        "array": "c",
+        "string_view": "c",
+        "initializer_list": "c",
+        "utility": "c",
+        "defs.h": "c",
+        "fs.h": "c",
+        "spinlock.h": "c"
+    }
+}

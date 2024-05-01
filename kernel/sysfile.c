@@ -484,3 +484,130 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  uint length, offset;
+  int port, flags, fd;
+  struct file* file;
+  struct proc *p = myproc();
+
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+  if(argint(2, &port) < 0 || argint(3, &flags) < 0)
+    return -1;
+  if(argfd(4, &fd, &file) < 0 || argint(5, &offset) < 0)
+    return -1;
+  if(!addr || !offset)
+    return -1;
+  if(!file->writable && (port & PROT_WRITE) && (flags & MAP_SHARED))
+    return -1;
+
+  struct VMA* vma;
+  for(int i = 0; i<VMA_SZ; ++i){
+    if(!vma[i].in_use){
+      vma[i].addr = p->sz;
+      vma[i].file = file;
+      vma[i].flags = flags;
+      vma[i].in_use = 1;
+      vma[i].length = PGROUNDUP(length);
+      vma[i].port = port;
+      vma[i].off = offset;
+      vma[i].valid_len = vma[i].length;
+      filedup(file);
+      p->sz += vma[i].length;
+      return vma[i].addr;
+    }
+  }
+  return -1;
+}
+
+int _fileWrite(struct file* f, uint64 addr, int n, uint off)
+{
+  int r, ret = 0;
+
+  if(f->writable == 0)
+    return -1;
+
+  if(f->type == FD_PIPE){
+    ret = pipewrite(f->pipe, addr, n);
+  } else if(f->type == FD_DEVICE){
+    if(f->major < 0 || f->major >= NDEV || !devsw[f->major].write)
+      return -1;
+    ret = devsw[f->major].write(1, addr, n);
+  } else if(f->type == FD_INODE){
+    // write a few blocks at a time to avoid exceeding
+    // the maximum log transaction size, including
+    // i-node, indirect block, allocation blocks,
+    // and 2 blocks of slop for non-aligned writes.
+    // this really belongs lower down, since writei()
+    // might be writing a device like the console.
+    int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+    int i = 0;
+    while(i < n){
+      int n1 = n - i;
+      if(n1 > max)
+        n1 = max;
+
+      begin_op();
+      ilock(f->ip);
+      if ((r = writei(f->ip, 1, addr + i, off, n1)) > 0)
+        off += r;
+      iunlock(f->ip);
+      end_op();
+
+      if(r != n1){
+        // error from writei
+        break;
+      }
+      i += r;
+    }
+    ret = (i == n ? n : -1);
+  } else {
+    panic("filewrite");
+  }
+
+  return ret;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  uint length;
+  struct proc* p = myproc();
+  struct VMA* vma = p->VMA;
+  int close = 0;
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+  for(int i = 0; i<VMA_SZ; ++i){
+    if(vma[i].in_use && addr >= vma[i].addr && addr < vma[i].addr + vma[i].length){
+      addr = PGROUNDDOWN(addr);
+      if(addr == vma[i].addr + vma[i].off){
+        if(length >= vma[i].valid_len){
+          vma[i].in_use = 0;
+          length = vma[i].valid_len;
+          close = 1;
+          p->sz -= vma[i].length;
+        }else{
+          vma[i].off += length;
+          vma[i].valid_len -= length;
+        }
+      }else{
+        length = vma[i].addr + vma[i].off + vma[i].valid_len - addr;
+        vma[i].valid_len -= length;
+      }
+      if(vma[i].flags & MAP_SHARED){
+        if(_fileWrite(vma[i].file, addr, length, addr - vma[i].addr) == -1)
+          return -1;
+      }
+      uvmunmap(p->pagetable, addr, PGROUNDDOWN(length)/PGSIZE, 1);
+      if(close)
+        fileclose(vma[i].file);
+      return 0;
+    }
+  }
+  return -1;
+}
